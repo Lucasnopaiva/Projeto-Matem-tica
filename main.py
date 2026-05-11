@@ -1,4 +1,5 @@
 import pygame
+import math
 import random
 
 pygame.init()
@@ -51,6 +52,8 @@ num_segmentos = 34
 altura_util = ALTURA - horizonte_y
 velocidade_scroll = 9
 scroll = 0
+curva_atual = 0
+curva_tempo = 0
 
 # Faixas seguras. Elas nao encostam nas bordas da pista.
 LANES = [-0.34, 0.0, 0.34]
@@ -69,6 +72,7 @@ pontuacao = 0
 game_over = False
 ultimo_lane = None
 obstaculos = []
+tempo_protecao = 1.25
 
 
 # ==============================
@@ -79,7 +83,7 @@ def profundidade_para_tela(z):
     p = z ** 1.75
     y = horizonte_y + p * altura_util
     largura = largura_topo + (largura_base - largura_topo) * (z ** 2.05)
-    return centro_x, y, largura
+    return centro_pista(z), y, largura
 
 
 def largura_pista(z):
@@ -87,7 +91,7 @@ def largura_pista(z):
 
 
 def centro_pista(z):
-    return centro_x
+    return centro_x + curva_atual * (z ** 1.45)
 
 
 def limites_pista_base():
@@ -96,16 +100,32 @@ def limites_pista_base():
     return centro - largura / 2 + margem, centro + largura / 2 - margem
 
 
+def atualizar_curva():
+    global curva_atual, curva_tempo
+
+    if pontuacao < 400:
+        curva_atual *= 0.94
+        curva_tempo = 0
+        return
+
+    curva_tempo += 0.014
+    intensidade = min(175, 75 + (pontuacao - 400) * 0.22)
+    alvo = math.sin(curva_tempo) * intensidade
+    curva_atual += (alvo - curva_atual) * 0.035
+
+
 # ==============================
 # OBSTACULOS
 # ==============================
-def escolher_lane(evitar=None):
+def escolher_lane(evitar=None, bloquear_centro=False):
     opcoes = [lane for lane in LANES if lane != evitar]
+    if bloquear_centro:
+        opcoes = [lane for lane in opcoes if lane != 0.0]
     return random.choice(opcoes)
 
 
-def criar_obstaculo(z, evitar_lane=None):
-    lane = escolher_lane(evitar_lane)
+def criar_obstaculo(z, evitar_lane=None, bloquear_centro=False):
+    lane = escolher_lane(evitar_lane, bloquear_centro)
     return {
         "z": z,
         "lane": lane,
@@ -116,8 +136,8 @@ def criar_obstaculo(z, evitar_lane=None):
 def criar_obstaculos():
     lista = []
     lane_anterior = None
-    for z in [0.09, 0.22, 0.36, 0.52, 0.70]:
-        obs = criar_obstaculo(z, lane_anterior)
+    for z in [0.06, 0.17, 0.29, 0.42, 0.56]:
+        obs = criar_obstaculo(z, lane_anterior, bloquear_centro=z >= 0.42)
         lane_anterior = obs["lane"]
         lista.append(obs)
     return lista
@@ -129,7 +149,7 @@ obstaculos = criar_obstaculos()
 def reciclar_obstaculo(obs):
     global ultimo_lane, pontuacao
 
-    obs["z"] = random.uniform(0.045, 0.095)
+    obs["z"] = random.uniform(0.035, 0.075)
     obs["lane"] = escolher_lane(ultimo_lane)
     obs["tipo"] = random.choice(["cone", "barreira", "cone"])
     ultimo_lane = obs["lane"]
@@ -143,6 +163,8 @@ def atualizar_obstaculos():
         obs["z"] += velocidade_z
         if obs["z"] > 1.08:
             reciclar_obstaculo(obs)
+
+    atualizar_curva()
 
 
 # ==============================
@@ -323,7 +345,7 @@ def desenhar_obstaculos(carro_rect):
 
     for obs in sorted(obstaculos, key=lambda item: item["z"]):
         rect = desenhar_obstaculo(obs)
-        if rect.colliderect(carro_rect):
+        if tempo_protecao <= 0 and rect.colliderect(carro_rect):
             game_over = True
 
 
@@ -335,11 +357,17 @@ def mostrar_hud():
     tela.blit(texto_pontos, (18, 18))
 
     fase = "Fase 1: pista reta e obstaculos justos"
-    if pontuacao >= 120:
+    if pontuacao >= 400:
+        fase = "Fase 3: curvas suaves na pista"
+    elif pontuacao >= 120:
         fase = "Fase 2: mais velocidade, mesma pista estavel"
 
     texto_fase = fonte_menor.render(fase, True, BRANCO)
     tela.blit(texto_fase, (18, 52))
+
+    if tempo_protecao > 0 and not game_over:
+        aviso = fonte_menor.render("Prepare-se", True, BRANCO)
+        tela.blit(aviso, (LARGURA // 2 - aviso.get_width() // 2, 92))
 
     if game_over:
         overlay = pygame.Surface((LARGURA, ALTURA), pygame.SRCALPHA)
@@ -353,13 +381,16 @@ def mostrar_hud():
 
 
 def reiniciar():
-    global carro_x, pontuacao, game_over, scroll, obstaculos, ultimo_lane
+    global carro_x, pontuacao, game_over, scroll, obstaculos, ultimo_lane, tempo_protecao, curva_atual, curva_tempo
 
     carro_x = centro_x
     pontuacao = 0
     game_over = False
     scroll = 0
     ultimo_lane = None
+    tempo_protecao = 1.25
+    curva_atual = 0
+    curva_tempo = 0
     obstaculos = criar_obstaculos()
 
 
@@ -368,7 +399,7 @@ def reiniciar():
 # ==============================
 rodando = True
 while rodando:
-    clock.tick(FPS)
+    dt = clock.tick(FPS) / 1000
 
     for evento in pygame.event.get():
         if evento.type == pygame.QUIT:
@@ -380,6 +411,8 @@ while rodando:
     teclas = pygame.key.get_pressed()
 
     if not game_over:
+        tempo_protecao = max(0, tempo_protecao - dt)
+
         if teclas[pygame.K_LEFT] or teclas[pygame.K_a]:
             carro_x -= velocidade_carro
         if teclas[pygame.K_RIGHT] or teclas[pygame.K_d]:
@@ -396,7 +429,7 @@ while rodando:
     desenhar_obstaculos(carro_rect)
 
     esquerda, direita = limites_pista_base()
-    if carro_rect.left < esquerda or carro_rect.right > direita:
+    if tempo_protecao <= 0 and (carro_rect.left < esquerda or carro_rect.right > direita):
         game_over = True
 
     mostrar_hud()
